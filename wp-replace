@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+
+usage() {
+  cat <<EOF
+Uso:
+  wp-replace [--wp=<id>] [--db=<id>] [--old=<valor_antiguo>] [--new=<valor_nuevo>]
+  wp-replace <wp-container-id> <db-container-id> <old-value> <new-value>
+
+Descripción:
+  Ejecuta un comando 'wp search-replace' dentro de un contenedor temporal con la imagen wordpress:cli,
+  detectando automáticamente la ruta del sitio y las credenciales de la base de datos desde el contenedor WP.
+
+Parámetros:
+  --wp     ID o nombre del contenedor de WordPress
+  --db     ID o nombre del contenedor de base de datos (MySQL/MariaDB)
+  --old    Valor actual a reemplazar
+  --new    Nuevo valor que reemplazará al anterior
+
+Ejemplos:
+  wp-replace 3bde1f56f5e2 2f9a8c93d11f fincaagustina.com.ar wp-test3.cuadrado.dev
+  wp-replace --wp=wp_1 --db=db_1 --old=http://viejo.com --new=http://nuevo.com
+EOF
+}
+
+
+error_exit() {
+  echo "❌ Error: $1" >&2
+  echo
+  usage
+  exit 1
+}
+
+
+WP_ID=""
+DB_ID=""
+OLD_VAL=""
+NEW_VAL=""
+HOST_PATH=""
+DB_HOST=""
+DB_USER=""
+DB_PASS=""
+DB_NAME=""
+
+
+parse_and_validate_args() {
+  declare -g WP_ID DB_ID OLD_VAL NEW_VAL
+
+  # Si no hay args mostrar ayuda
+  if (( $# == 0 )); then
+    usage
+    exit 1
+  fi
+
+  # Parsing
+  while (( $# > 0 )); do
+    case "$1" in
+      --wp=* )   WP_ID="${1#*=}" ;;
+      --db=* )   DB_ID="${1#*=}" ;;
+      --old=* )  OLD_VAL="${1#*=}" ;;
+      --new=* )  NEW_VAL="${1#*=}" ;;
+      -h|--help ) usage; exit 0 ;;
+      * )
+        if [[ -z "$WP_ID" ]]; then
+          WP_ID="$1"
+        elif [[ -z "$DB_ID" ]]; then
+          DB_ID="$1"
+        elif [[ -z "$OLD_VAL" ]]; then
+          OLD_VAL="$1"
+        elif [[ -z "$NEW_VAL" ]]; then
+          NEW_VAL="$1"
+        else
+          error_exit "Argumento desconocido: $1"
+        fi
+        ;;
+    esac
+    shift || break
+  done
+
+  # Validación
+  [[ -z "$WP_ID"   ]] && error_exit "Falta el ID del contenedor de WordPress (--wp o primer parámetro)"
+  [[ -z "$DB_ID"   ]] && error_exit "Falta el ID del contenedor de base de datos (--db o segundo parámetro)"
+  [[ -z "$OLD_VAL" ]] && error_exit "Falta el valor antiguo (--old o tercer parámetro)"
+  [[ -z "$NEW_VAL" ]] && error_exit "Falta el valor nuevo (--new o cuarto parámetro)"
+  echo
+}
+
+
+get_container_data() {
+  local WP_INSPECT DB_INSPECT
+
+  echo "🔍 Obteniendo información de contenedores..."
+  WP_INSPECT=$(docker inspect "$WP_ID") || error_exit "No se pudo inspeccionar el contenedor de WordPress ($WP_ID)"
+  
+  HOST_PATH=$(echo "$WP_INSPECT" | grep -A 20 -B 5 '"Destination": "/var/www/html"' | grep '"Source"' | head -1 | sed -E 's/.*"Source": "([^"]+)".*/\1/')
+  [[ -z "$HOST_PATH" || "$HOST_PATH" == "null" ]] && error_exit "No se encontró el bind mount a /var/www/html en WP"
+  
+  DB_HOST=$(echo "$WP_INSPECT" | grep -o '"WORDPRESS_DB_HOST=[^"]*' | cut -d= -f2)
+  DB_USER=$(echo "$WP_INSPECT" | grep -o '"WORDPRESS_DB_USER=[^"]*' | cut -d= -f2)
+  DB_PASS=$(echo "$WP_INSPECT" | grep -o '"WORDPRESS_DB_PASSWORD=[^"]*' | cut -d= -f2)
+  DB_NAME=$(echo "$WP_INSPECT" | grep -o '"WORDPRESS_DB_NAME=[^"]*' | cut -d= -f2)
+  
+  [[ -z "$DB_HOST" || -z "$DB_USER" || -z "$DB_PASS" || -z "$DB_NAME" ]] && error_exit "No se pudieron obtener las variables de entorno de la BD"
+
+  if [[ "$DB_HOST" != *:* ]]; then
+      DB_HOST="${DB_HOST}:3306"
+  fi
+
+  echo "📁 Directorio del sitio: $HOST_PATH"
+  echo "🗄️ Conexión DB -> Host: '$DB_HOST' | User: '$DB_USER' | Name: '$DB_NAME'"
+}
+
+
+manage_network_and_test() {
+  local DB_HOST_NC DB_PORT_NC DB_INSPECT DB_CONTAINER_NAME
+
+  if ! docker network ls --format '{{.Name}}' | grep -q '^wpcli$'; then
+    echo "🌐 Creando red 'wpcli'..."
+    docker network create wpcli >/dev/null
+  fi
+
+  echo "🔗 Conectando contenedores a la red wpcli..."
+  docker network connect wpcli "$WP_ID" 2>/dev/null || true
+  docker network connect wpcli "$DB_ID" 2>/dev/null || true
+
+  echo "📡 Comprobando visibilidad de red..."
+  DB_HOST_NC=$(echo "$DB_HOST" | cut -d: -f1)
+  DB_PORT_NC=$(echo "$DB_HOST" | cut -d: -f2)
+
+  if ! docker run --rm --network wpcli \
+    wordpress:cli /bin/bash -c "nc -vz $DB_HOST_NC $DB_PORT_NC" >/dev/null 2>&1; then
+    
+    echo "⚠️ Fallback activado..."
+    DB_INSPECT=$(docker inspect "$DB_ID") || error_exit "No se pudo inspeccionar el contenedor de la base de datos"
+    DB_CONTAINER_NAME=$(echo "$DB_INSPECT" | grep '"Name":' | head -1 | cut -d: -f2 | tr -d '", ' | sed 's/^\///')
+    [[ -z "$DB_CONTAINER_NAME" ]] && error_exit "No se pudo obtener el nombre del contenedor de la BD para el fallback."
+    
+    DB_HOST="${DB_CONTAINER_NAME}:${DB_PORT_NC}"
+    echo "♻️ Usando fallback con nombre del contenedor: $DB_HOST"
+  else
+    echo "✅ Host de BD visible."
+  fi
+}
+
+
+run_wpcli_command() {
+  echo "🚀 Ejecutando búsqueda y reemplazo..."
+  docker run --rm -it \
+    -v "${HOST_PATH}:/var/www/html" \
+    --network wpcli \
+    -e WORDPRESS_DB_HOST="${DB_HOST}" \
+    -e WORDPRESS_DB_USER="${DB_USER}" \
+    -e WORDPRESS_DB_PASSWORD="${DB_PASS}" \
+    -e WORDPRESS_DB_NAME="${DB_NAME}" \
+    wordpress:cli \
+    --path=/var/www/html \
+    search-replace "${OLD_VAL}" "${NEW_VAL}" \
+    --format=count
+}
+
+
+cleanup() {
+  docker network disconnect wpcli "$WP_ID" 2>/dev/null || true
+  docker network disconnect wpcli "$DB_ID" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+
+main() {
+  parse_and_validate_args "$@"
+  get_container_data
+  manage_network_and_test
+  run_wpcli_command
+  cleanup
+  echo "✅ Proceso completado exitosamente."
+}
+
+main "$@"
