@@ -248,10 +248,10 @@ trap cleanup EXIT
 main() {
   parse_and_validate_args "$@"
   set_variables_with_containers_data
-  # create_wpcli_container_and_network
-  # connect_containers_to_wpcli_net
-  # sync_databases
-  # cleanup
+  create_wpcli_container_and_network
+  connect_containers_to_wpcli_net
+  sync_databases
+  cleanup
 }
 
 main "$@"
