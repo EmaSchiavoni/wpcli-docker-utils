@@ -76,8 +76,8 @@ wp-replace <wp-container-id> <db-container-id> <old-value> <new-value>
 ```
 
 ```bash
-wp-sync-staging [--prod-wp=<id>] [--prod-db=<id>] [--staging-wp=<id>] [--staging-db=<id>] [--live-domain=<dominio>] [--staging-domain=<dominio>]
-wp-sync-staging <prod-wp-container-id> <prod-db-container-id> <staging-wp-container-id> <staging-db-container-id> <live-domain> <staging-domain>
+wp-migrate-db [--src-wp=<id>] [--src-db=<id>] [--dest-wp=<id>] [--dest-db=<id>] [--src-domain=<dominio>] [--dest-domain=<dominio>]
+wp-migrate-db <src-wp-container-id> <src-db-container-id> <dest-wp-container-id> <dest-db-container-id> <src-domain> <dest-domain>
 ```
 
 ## 📄 Licencia
