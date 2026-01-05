@@ -13,14 +13,16 @@ Descripción:
   detectando automáticamente la ruta del sitio y las credenciales de la base de datos desde el contenedor WP.
 
 Parámetros:
-  --wp     ID o nombre del contenedor de WordPress
-  --db     ID o nombre del contenedor de base de datos (MySQL/MariaDB)
-  --old    Valor actual a reemplazar
-  --new    Nuevo valor que reemplazará al anterior
+  --wp      ID o nombre del contenedor de WordPress
+  --db      ID o nombre del contenedor de base de datos (MySQL/MariaDB)
+  --old     Valor actual a reemplazar
+  --new     Nuevo valor que reemplazará al anterior
+  --network (OPCIONAL) para buscar y reemplazar en todos los sitios de una instalación de WordPress Multisite
 
 Ejemplos:
   wp-replace 3bde1f56f5e2 2f9a8c93d11f prod-domain.com staging-domain.com
   wp-replace --wp=wp_1 --db=db_1 --old=http://old.com --new=http://new.com
+  wp-replace 7abf2e 511fa multisite-prod.com multisite-staging.com --network
 EOF
 }
 
@@ -42,10 +44,11 @@ DB_HOST=""
 DB_USER=""
 DB_PASS=""
 DB_NAME=""
+ACROSS_NETWORK=0
 
 
 parse_and_validate_args() {
-  declare -g WP_ID DB_ID OLD_VAL NEW_VAL
+  declare -g WP_ID DB_ID OLD_VAL NEW_VAL ACROSS_NETWORK
 
   # Si no hay args mostrar ayuda
   if (( $# == 0 )); then
@@ -60,6 +63,7 @@ parse_and_validate_args() {
       --db=* )   DB_ID="${1#*=}" ;;
       --old=* )  OLD_VAL="${1#*=}" ;;
       --new=* )  NEW_VAL="${1#*=}" ;;
+      --network )  ACROSS_NETWORK=1 ;;
       -h|--help ) usage; exit 0 ;;
       * )
         if [[ -z "$WP_ID" ]]; then
@@ -145,6 +149,12 @@ manage_network_and_test() {
 
 
 run_wpcli_command() {
+  local NETWORK_OPTIONAL_STR=""
+
+  if (( ACROSS_NETWORK == 1 )); then
+    NETWORK_OPTIONAL_STR="--network"
+  fi
+
   echo "🚀 Ejecutando búsqueda y reemplazo..."
   docker run --rm -it \
     -v "${HOST_PATH}:/var/www/html" \
@@ -156,7 +166,8 @@ run_wpcli_command() {
     wordpress:cli \
     --path=/var/www/html \
     search-replace "${OLD_VAL}" "${NEW_VAL}" \
-    --format=count
+    --format=count \
+    ${NETWORK_OPTIONAL_STR}
 }
 
 
