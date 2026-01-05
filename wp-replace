@@ -19,8 +19,8 @@ Parámetros:
   --new    Nuevo valor que reemplazará al anterior
 
 Ejemplos:
-  wp-replace 3bde1f56f5e2 2f9a8c93d11f fincaagustina.com.ar wp-test3.cuadrado.dev
-  wp-replace --wp=wp_1 --db=db_1 --old=http://viejo.com --new=http://nuevo.com
+  wp-replace 3bde1f56f5e2 2f9a8c93d11f prod-domain.com staging-domain.com
+  wp-replace --wp=wp_1 --db=db_1 --old=http://old.com --new=http://new.com
 EOF
 }
 
